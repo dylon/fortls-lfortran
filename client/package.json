@@ -1,0 +1,24 @@
+{
+  "name": "fortls-lfortran-client",
+  "description": "FortLS LFortran LSP client.",
+  "author": "LCompilers",
+  "license": "MIT",
+  "version": "1.0.0",
+  "publisher": "LCompilers",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fortran-lang/fortls"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "dependencies": {
+    "@types/which": "^3.0.4",
+    "vscode-languageclient": "^9.0.1",
+    "@vscode/python-extension": "1.0.5"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.95.0",
+    "@vscode/test-electron": "^2.4.1"
+  }
+}
