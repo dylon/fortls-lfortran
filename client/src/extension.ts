@@ -18,11 +18,8 @@
  * ----------------------------------------------------------------------- */
 "use strict";
 
-import path from "path";
+import { spawnSync, SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 
-import { spawnSync } from "node:child_process";
-
-import * as net from "net";
 import * as path from "path";
 import * as vscode from "vscode";
 import * as semver from "semver";
@@ -30,7 +27,14 @@ import * as semver from "semver";
 import which from "which";
 
 import { PythonExtension } from "@vscode/python-extension";
-import { LanguageClient, LanguageClientOptions, ServerOptions, State, integer } from "vscode-languageclient/node";
+
+import {
+  integer,
+  LanguageClient,
+  LanguageClientOptions,
+  ServerOptions,
+  State,
+} from "vscode-languageclient/node";
 
 const MIN_PYTHON = semver.parse("3.11.0")
 
@@ -47,7 +51,10 @@ let logger: vscode.LogOutputChannel
 
 const RE_PYTHON_VERSION = /^Python (?<major>[0-9]+)\.(?<minor>[0-9]+)\.(?<micro>[0-9]+)$/;
 
-function satisfiesMinPythonVersion(pythonVersion: string): boolean {
+function satisfiesMinPythonVersion(pythonVersion: string | undefined): boolean {
+  if (pythonVersion === undefined) {
+    return false;
+  }
   const versionMatch = RE_PYTHON_VERSION.exec(pythonVersion);
   const majorVersion = parseInt(versionMatch.groups.major, 10);
   const minorVersion = parseInt(versionMatch.groups.minor, 10);
@@ -60,30 +67,18 @@ function satisfiesMinPythonVersion(pythonVersion: string): boolean {
  * Called when vscode first activates the extension
  */
 export async function activate(context: vscode.ExtensionContext) {
-  logger = vscode.window.createOutputChannel('FortLS LFortran Language Server', { log: true });
+  logger = vscode.window.createOutputChannel('FortLS LFortran Language Server', {
+    log: true
+  });
+
   logger.info("Extension activated.");
 
   await getPythonExtension();
+
   if (!python) {
-    logger.info("[1] No python, returning ...");
+    logger.error("No python env detected, terminating...");
     return;
   }
-
-  // Restart language server command
-  context.subscriptions.push(
-    vscode.commands.registerCommand("FortLSLFortranLanguageServer.server.restart", async () => {
-      logger.info('restarting server...');
-      await startLangServer();
-    })
-  )
-
-  // Execute command... command
-  context.subscriptions.push(
-    vscode.commands.registerCommand("FortLSLFortranLanguageServer.server.executeCommand", async () => {
-      logger.info("Executing command ...");
-      await executeServerCommand();
-    })
-  )
 
   // Restart the language server if the user switches Python envs...
   context.subscriptions.push(
@@ -91,53 +86,9 @@ export async function activate(context: vscode.ExtensionContext) {
       logger.info('python env modified, restarting server...')
       await startLangServer();
     })
-  )
+  );
 
-  // ... or if they change a relevant config option
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration(async (event) => {
-      if (event.affectsConfiguration("FortLSLFortranLanguageServer.server") || event.affectsConfiguration("FortLSLFortranLanguageServer.client")) {
-        logger.info('config modified, restarting server...');
-        await startLangServer();
-      }
-    })
-  )
-
-  // Start the language server once the user opens the first text document...
-  context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(
-      async () => {
-        if (!client) {
-          logger.info("[1] No client, starting lang server ...");
-          await startLangServer();
-        }
-      }
-    )
-  )
-
-  // ...or notebook.
-  context.subscriptions.push(
-    vscode.workspace.onDidOpenNotebookDocument(
-      async () => {
-        if (!client) {
-          logger.info("[2] No client, starting lang server ...");
-          await startLangServer();
-        }
-      }
-    )
-  )
-
-  // Restart the server if the user modifies it.
-  context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument(async (document: vscode.TextDocument) => {
-      const expectedUri = vscode.Uri.file(getServerPath());
-
-      if (expectedUri.toString() === document.uri.toString()) {
-        logger.info('server modified, restarting...');
-        await startLangServer();
-      }
-    })
-  )
+  await startLangServer();
 }
 
 export function deactivate(): Thenable<void> {
@@ -155,44 +106,55 @@ async function startLangServer() {
 
   // Don't interfere if we are already in the process of launching the server.
   if (clientStarting) {
-    logger.info("clientStarging, returning ...");
-    return
+    logger.info("clientStarting, returning ...");
+    return;
   }
 
-  clientStarting = true
+  clientStarting = true;
   if (client) {
-    await stopLangServer()
+    await stopLangServer();
   }
-  const config = vscode.workspace.getConfiguration("FortLSLFortranLanguageServer.server")
-  const serverPath = getServerPath()
+  const config = vscode.workspace.getConfiguration("FortLSLFortranLanguageServer.server");
+  const serverPath = getServerPath();
 
-  logger.info(`server: '${serverPath}'`)
+  logger.info(`server: '${serverPath}'`);
 
-  const resource = vscode.Uri.file(serverPath)
-  const pythonCommand = await getPythonCommand(resource)
+  const resource = vscode.Uri.file(serverPath);
+  const pythonCommand = await getPythonCommand(resource);
   if (!pythonCommand) {
-    logger.info("no pythonCommand, returning ...");
-    clientStarting = false
-    return
+    logger.warn("python command not found.");
+    clientStarting = false;
+    return;
   }
 
-  // logger.debug(`python: ${pythonCommand.join(" ")}`)
   logger.info(`python: ${pythonCommand.join(" ")}`)
+
   const serverOptions: ServerOptions = {
     command: pythonCommand[0],
-    args: [...pythonCommand.slice(1), serverPath]
+    args: [...pythonCommand.slice(1), serverPath],
+    options: {
+      env: process.env,
+    },
   };
 
-  // client = new LanguageClient(
-  //   "FortLSLFortranLanguageServer",
-  //   "FortLS LFortran Language Server",
-  //   serverOptions,
-  //   getClientOptions());
+  const clientOptions: LanguageClientOptions = {
+    documentSelector: [
+      {
+        scheme: "file",
+        language: "fortran"
+      },
+    ],
+    outputChannel: logger,
+    connectionOptions: {
+      maxRestartCount: 0 // don't restart on server failure.
+    },
+  };
+
   client = new LanguageClient(
-    "fortran",
+    "FortLSLFortranLanguageServer",
     "FortLS-LFortran Language Server",
     serverOptions,
-    getClientOptions());
+    clientOptions);
   const promises = [client.start()]
 
   if (config.get<boolean>("debug")) {
@@ -236,68 +198,6 @@ function startDebugging(): Promise<void> {
   }, 2000);
 }
 
-function getClientOptions(): LanguageClientOptions {
-  const config = vscode.workspace.getConfiguration('FortLSLFortranLanguageServer.client')
-  const options = {
-    documentSelector: config.get<any>('documentSelector'),
-    outputChannel: logger,
-    connectionOptions: {
-      maxRestartCount: 0 // don't restart on server failure.
-    },
-  };
-  logger.info(`client options: ${JSON.stringify(options, undefined, 2)}`)
-  return options
-}
-
-function startLangServerTCP(addr: number): LanguageClient {
-  const serverOptions: ServerOptions = () => {
-    return new Promise((resolve /*, reject */) => {
-      const clientSocket = new net.Socket();
-      clientSocket.connect(addr, "127.0.0.1", () => {
-        resolve({
-          reader: clientSocket,
-          writer: clientSocket,
-        });
-      });
-    });
-  };
-
-  return new LanguageClient(
-    `tcp lang server (port ${addr})`,
-    serverOptions,
-    getClientOptions()
-  );
-}
-
-/**
- * Execute a command provided by the language server.
- */
-async function executeServerCommand() {
-  if (!client || client.state !== State.Running) {
-    await vscode.window.showErrorMessage("There is no language server running.")
-    return
-  }
-
-  const knownCommands = client.initializeResult.capabilities.executeCommandProvider?.commands
-  if (!knownCommands || knownCommands.length === 0) {
-    const info = client.initializeResult.serverInfo
-    const name = info?.name || "Server"
-    const version = info?.version || ""
-
-    await vscode.window.showInformationMessage(`${name} ${version} does not implement any commands.`)
-    return
-  }
-
-  const commandName = await vscode.window.showQuickPick(knownCommands, { canPickMany: false })
-  if (!commandName) {
-    return
-  }
-  logger.info(`executing command: '${commandName}'`)
-
-  const result = await vscode.commands.executeCommand(commandName /* if your command accepts arguments you can pass them here */)
-  logger.info(`${commandName} result: ${JSON.stringify(result, undefined, 2)}`)
-}
-
 /**
  *
  * @returns The python script that implements the server.
@@ -319,7 +219,6 @@ async function getPythonCommand(resource?: vscode.Uri): Promise<string[] | undef
   const config = vscode.workspace.getConfiguration("FortLSLFortranLanguageServer.server", resource)
   const pythonPath = await getPythonInterpreter(resource)
   if (!pythonPath) {
-    logger.info("No pythonPath, returning ...");
     return;
   }
   const command = [pythonPath];
@@ -360,25 +259,30 @@ async function getPythonInterpreter(resource?: vscode.Uri): Promise<string | und
   }
 
   if (!python) {
+    let pythonVersion: string | undefined;
+
+    const commandOptions: SpawnSyncOptionsWithStringEncoding = {
+      encoding: "utf-8",
+      stdio: "pipe",
+    };
+
     pythonPath = await which("python3", { nothrow: true });
     if (pythonPath) {
-      const options = {
-        encoding: "utf-8",
-        stdio: "pipe",
-      };
-      let pythonVersion = await spawnSync(pythonPath, ["--version"], options);
-      if (!satisfiesMinPythonVersion(pythonVersion)) {
-        pythonPath = await which("python", { nothrow: true });
-        if (pythonPath) {
-          pythonVersion = await spawnSync(pythonPath, ["--version"], options);
-        }
-      }
-      if (satisfiesMinPythonVersion(pythonVersion)) {
-        logger.info(`Using python from \$PATH: '${pythonPath}'`);
-        return pythonPath;
+      pythonVersion = spawnSync(pythonPath, ["--version"], commandOptions).stdout;
+    }
+
+    if ((pythonVersion === undefined) || !satisfiesMinPythonVersion(pythonVersion)) {
+      pythonPath = await which("python", { nothrow: true });
+      if (pythonPath) {
+        pythonVersion = spawnSync(pythonPath, ["--version"], commandOptions).stdout;
       }
     }
-    logger.info("[2] No python, returning ...");
+
+    if (satisfiesMinPythonVersion(pythonVersion)) {
+      logger.info(`Using python from $PATH: '${pythonPath}'`);
+      return pythonPath;
+    }
+
     return;
   }
 

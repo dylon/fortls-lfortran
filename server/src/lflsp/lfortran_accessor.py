@@ -1,5 +1,6 @@
 import atexit
 import json
+import logging
 import os
 import re
 import shutil
@@ -12,7 +13,11 @@ from lsprotocol import converters, types as lsp
 
 from cattrs import Converter
 
+
+logger = logging.getLogger(__name__)
+
 RE_FILE_URI: re.Pattern = re.compile(r"^file:(?:\/\/)?")
+
 
 class LFortranAccessor(ABC):
 
@@ -82,8 +87,11 @@ class LFortranCLIAccessor(LFortranAccessor):
                      no_response_is_success: bool = False) -> str:
         output: str = default_value
 
-        with tempfile.NamedTemporaryFile(prefix="fortls-lfortran-lsp-", suffix=".tmp") as f:
+        with tempfile.NamedTemporaryFile(prefix="fortls-lfortran-lsp-", suffix=".tmp", mode="w+t") as f:
             f.write(text)
+
+            # NOTE: Reset the file location so lfortran can read it before the
+            # tempfile is closed and deleted.
             f.seek(0)
 
             lfortran_path: Optional[str] = settings["compiler"]["lfortranPath"]
@@ -95,13 +103,20 @@ class LFortranCLIAccessor(LFortranAccessor):
 
             if lfortran_path is None or \
                not self.check_path_exists_and_is_executable(lfortran_path):
+                self.show_message_log(f"lfortran_path = [{lfortran_path}] is not executable.")
                 return output
 
             params = params + settings["compiler"]["flags"] + [f.name]
             command: List[str] = [lfortran_path] + params
 
-            result = subprocess.run(command, capture_output=True, text=True, stderr=subprocess.STDOUT)
+            result = subprocess.run(command,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT
+            )
             output = result.stdout  # includes stdout and stderr
+
+            self.show_message_log(f"command = `{' '.join(command)}`, output = {output}")
 
         return output
 
@@ -289,7 +304,7 @@ class LFortranCLIAccessor(LFortranAccessor):
                     lsp_end: lsp.Position = lsp_range.end
                     lsp_end.line -= 1
 
-                    lsp_diagnostics.push(lsp_diagnostic)
+                    lsp_diagnostics.append(lsp_diagnostic)
 
         return lsp_diagnostics
 
