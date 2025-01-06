@@ -33,6 +33,10 @@ Build the extension:
 npx vsce package
 ```
 
+The JavaScript/ECMAScript/TypeScript dependencies will be bundled with the
+extension's client, and the Python dependencies will be installed alongside the
+extension's language server.
+
 The extension may then be installed from the compiled `.vsix` file:
 1. Click the `"Extensions"` tab or press `Ctrl + Shift + x`.
 2. Near the top-right of the panel that opens, click the horizontal ellipsis
